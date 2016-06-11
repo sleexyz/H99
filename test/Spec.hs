@@ -13,6 +13,8 @@ mkTest desc test = putStrLn ("\n+++ Testing " ++ desc) >> test
 
 
 
+-- TODO: Arbitrary samelength vectors
+
 testTABA = let
     deconvolve :: [(a, b)] -> ([a], [b])
     deconvolve = (\(a, b) -> (a, reverse b)) . unzip

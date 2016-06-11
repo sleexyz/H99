@@ -1,8 +1,20 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UnicodeSyntax #-}
+
 module Lib
   where
+
 import           Control.Applicative
 import           Control.Monad
 import           System.Random
+import           Data.Maybe
+import           Data.Monoid
+import           Data.List
 
 -- |1
 
@@ -60,7 +72,7 @@ myLength xs = fn xs 0
 
 -- fold method
 myLength' :: [a] -> Int
-myLength' = foldr ((+) . const 1) 0
+myLength' = foldr (const (+1)) 0
 
 -- |5
 
@@ -81,7 +93,7 @@ myReverse' = foldl (flip (:)) []
 
 -- naive method
 isPalindrome :: (Eq a) => [a] -> Bool
-isPalindrome xs = xs == foldl (flip (:)) [] xs
+isPalindrome xs = xs == myReverse' xs
 
 -- TABA method
 
@@ -123,6 +135,7 @@ convolveHalves xs = fst $ walk xs xs
 
 -- Here we switch out tuple-making with equality checking, and cons with &&
 -- and we get isPalindrome!
+
 isPalindrome' :: (Eq a) => [a] -> Bool
 isPalindrome' xs = fst $ walk xs xs
   where
@@ -133,6 +146,12 @@ isPalindrome' xs = fst $ walk xs xs
         (r, b:bs) = walk as ds
       in (r && (a == b), bs)
 
+isPalindrome'' :: (Eq a) => [a] -> Bool
+isPalindrome'' xs = fst $ fst $ foldr func ((True, xs), xs) xs
+  where
+    func _ ((r, as), []) = ((r, as), []) -- short circuit (even)
+    func _ ((r, as), [d]) = ((r, as), [d]) -- short circuit (odd)
+    func x ((r, a:as), _:_:ds) = ((r && (x == a), as), ds)
 
 -- |7
 data NestedList a = Elem a | List [NestedList a]
@@ -147,33 +166,82 @@ flatten (Elem x) = [x]
 flatten (List xs) = foldr (flip (++) . flatten) [] xs
 
 
--- alternative representations
+-- alternative type representation
 flatten' :: NestedList a -> NestedList a
-flatten' xs = List $ map Elem $ flatten xs
+flatten' xs = List $ Elem <$> flatten xs
 
+-- With GADT syntax:
+-- type Func cxt a = cxt a => a -> a
+
+data Tree a where
+  Tree :: [Tree a] -> Tree a
+  Leaf :: a ->  Tree a
+
+-- treeShow :: Func Show a -> Func Show (Tree a)
+-- treeShow = Tree
+
+-- leafShow :: Func Show a -> Func Show (Leaf a)
+-- leafShow = Leaf
+
+instance Functor Tree where
+  fmap f (Leaf x) = Leaf $ f x
+  fmap f (Tree xs) = Tree $ map (fmap f) xs
+
+flattenTree :: Tree a -> [a]
+flattenTree (Leaf x) = [x]
+flattenTree (Tree xs) = foldr ((++) . flattenTree) [] xs
+
+flattenTree' :: (Show a) => Tree a -> Tree a
+flattenTree' xs = Tree $ Leaf <$> flattenTree xs
 
 -- |8
+
+-- stack-open
 compress :: Eq a => [a] -> [a]
 compress [] = []
-compress xs = reverse $ fn xs []
-             where
-               fn [] ys = ys
-               fn (x:[]) ys = (x:ys)
-               fn (x1:x2:xs) ys
-                  | x1 == x2 = fn (x2:xs) ys
-                  | otherwise = fn (x2:xs) (x1:ys)
+compress (x:[]) = [x]
+compress (x₀:x₁:xs)
+  | x₀ ==  x₁   = compress $ x₀:xs
+  | otherwise = x₀:compress (x₁:xs)
 
--- TODO: can I compress without reverse?
+
+-- foldr
+compress' :: (Eq a) => [a] -> [a]
+compress' [] = []
+compress' (x:xs) = (:) x $ snd $ foldr fn (x, []) xs
+  where
+    fn :: (Eq a) => a -> (a, [a]) -> (a, [a])
+    fn x (y, ys)
+      | x == y    = (y, ys)
+      | otherwise = (x, x:ys)
+
+
+-- TODO: Make tail recursive. Perhaps examine how foldr works?
+compress'' :: (Eq a) => [a] -> [a]
+compress'' [] = []
+compress'' (x:xs) = (:) x $ fn xs x
+  where
+    fn []         _   = []
+    fn (new:rest) old
+      | new == old = fn rest old
+      | otherwise  = new : fn rest new
+
+-- TODO: fix into an actual foldr. This is a foldl with leftwise accumulation function
+-- myFoldr :: (a -> b -> b) -> b -> [a] -> b
+-- myFoldr func = f
+--   where
+--     f y []     = y
+--     f y (x:xs) = f (func x y) xs
 
 -- |9
-pack :: Eq a => [a] -> [[a]]
-pack xs = reverse $ fn xs []
-          where
-            fn [] ys = ys
-            fn (x:xs) [] = fn xs [[x]]
-            fn (x:xs) ((y:ys):yss)
-               | x == y = fn (xs) ((x:y:ys):yss)
-               | otherwise = fn (xs) ([x]:(y:ys):yss)
+pack :: (Eq a) => [a] -> [[a]]
+pack [] = []
+pack (x:xs) = foldr fn [[x]] xs
+  where
+    fn :: (Eq a) => a -> [[a]] -> [[a]]
+    fn x ((y:xs):xss)
+      | x == y    = (x:x:xs):xss
+      | otherwise = [y]:(x:xs):xss
 
 -- |10
 encode :: Eq a => [a] -> [(Int, a)]
@@ -184,47 +252,45 @@ data Enc a = Multiple Int a | Single a
            deriving (Show)
 
 encodeModified xs = map f $ encode xs
-                    where
-                      f (1, x) = Single x
-                      f (n, x) = Multiple n x
+  where
+    f (1, x) = Single x
+    f (n, x) = Multiple n x
 
 -- |12
 decodeModified :: Eq a => [Enc a] -> [a]
 decodeModified = foldr ((++) . fn) []
-                 where
-                   fn (Single a) = [a]
-                   fn (Multiple n a) = replicate n a
+  where
+    fn (Single a) = [a]
+    fn (Multiple n a) = replicate n a
 
 -- |13
 
--- Can I do this without reverse?
-encodeDirect :: Eq a => [a] -> [Enc a]
-encodeDirect xs = reverse $ fn xs []
-                  where
-                    fn [] ys = ys
-                    fn (x:xs) [] = fn xs [(Single x)]
-                    fn (x:xs) ((Single y):ys)
-                       | x == y = fn (xs) ((Multiple 2 y):ys)
-                       | otherwise = fn (xs) ((Single x):(Single y):ys)
-                    fn (x:xs) ((Multiple n y):ys)
-                       | x == y = fn (xs) ((Multiple (n+1) y):ys)
-                       | otherwise = fn (xs) ((Single x):(Multiple n y):ys)
+encodeDirect :: (Eq a) => [a] -> [Enc a]
+encodeDirect [] = []
+encodeDirect (x:xs) = foldr fn [Single x] xs
+  where
+    fn :: (Eq a) => a -> [Enc a] -> [Enc a]
+    fn x (Single y:ys)
+      | x == y = Multiple 2 y : ys
+      | otherwise = Single x : Single y : ys
+    fn x (Multiple n y:ys)
+      | x == y    = Multiple (n+1) y : ys
+      | otherwise = Single x : Multiple n y : ys
 
 -- |14
 dupli :: [a] -> [a]
-dupli = foldr ((++) . (replicate 2)) []
+dupli = foldr ((++) . replicate 2) []
 
 -- |15
 repli :: [a] -> Int -> [a]
-repli xs = \n -> foldr ((++) . (replicate n)) [] xs -- point-free gets ugly when you need to flip
+repli xs n = foldr ((++) . (replicate n)) [] xs -- point-free gets ugly when you need to flip
 
 -- |16
 dropEvery :: [a] -> Int -> [a]
-dropEvery xs n = reverse $ fn xs [] n
-                 where
-                   fn [] ys _ = ys
-                   fn (x:xs) ys 0 = fn xs ys n
-                   fn (x:xs) ys i = fn xs (x:ys) (i-1)
+dropEvery xs n = fst $ foldr fn ([], n) xs
+  where
+    fn x (xs, 0) = (xs, n)
+    fn x (xs, i) = (x:xs, i - 1)
 
 -- |17
 mySplit :: [a] -> Int -> ([a], [a])
@@ -241,21 +307,15 @@ mySlice xs n m = fst $ (flip mySplit) (m-n+1) $ snd $ mySplit xs (n-1)
 
 -- |19
 rotate :: [a] -> Int -> [a]
-rotate xs n = fn xs [] (n `mod` length xs)
-              where
-                fn xs ys 0  = (xs) ++ (reverse ys)
-                fn (x:xs) ys i = fn xs (x:ys) (i-1)
+rotate xs n = drop n xs ++ take n xs
 
 -- |20
 removeAt :: Int -> [a] -> (a, [a])
-removeAt n xs  = ((xs!!(n-1)), (take (n-1) xs) ++ (drop n xs))
+removeAt n xs  = ( xs!!(n-1)
+                 , take (n-1) xs ++ drop n xs
+                 )
 
 
-removeAt' :: Int -> [a] -> (a, [a])
-removeAt' n xs  = fn xs [] (n-1)
-  where
-    fn (x:xs) ys 0 = (x, (reverse ys)++xs)
-    fn (x:xs) ys i = fn xs (x:ys) (i-1)
 
 -- |21
 insertAt :: a -> [a] -> Int -> [a]
@@ -266,18 +326,72 @@ insertAt x xs n = fn $ splitAt (n-1) xs
 -- |22
 range :: Int -> Int -> [Int]
 range n m
-      | n == m +1 = []
-      | otherwise = n:(range (n+1) m)
+  | n == m +1 = []
+  | otherwise = n:range (n+1) m
 
 range' :: Int -> Int -> [Int]
 range' n m = [n..m]
 
+range'' :: Int -> Int -> [Int]
+range'' n m = take (m-n + 1) $ iterate (+1) n
+
+
+-- TODO: get different seeds
 
 -- |23
 rndSelect :: [a] -> Int -> IO [a]
 rndSelect xs n = do
-  pos <- replicateM n $
-         getStdRandom $ randomR (0, (length xs) -1)
-  return [xs !! x | x <- pos]
+  g <- getStdGen
+  return $ map (xs!!) $ take n $ randomRs (0, length xs - 1) g
 
 -- |24
+diffSelect :: Int -> Int -> IO [Int]
+diffSelect n m = do
+  g <- getStdGen
+  return $ take n $ randomRs (0, m) g
+
+-- |25
+
+rndPermu :: [a] -> IO [a]
+rndPermu xs = rndSelect xs $ length xs
+
+
+-- TODO: fix
+-- |26
+
+-- combinations :: [a] -> [[a]]
+-- combinations xs = comb xs [] []
+--   where
+--     comb :: [a] -> [a] -> [a] -> [[a]]
+--     comb (x:xs) keep toss
+--       = comb xs (x:keep) toss
+--       ++ comb xs keep (x:toss)
+--     comb [] keep toss = [keep]
+
+permu :: Int -> [[Int]]
+permu n = (!!n) $ iterate (permu' n) [[]]
+
+permu' :: Int -> [[Int]] -> [[Int]]
+permu' n xs = catMaybes $ fn <$> [1..n]  <*> xs
+  where
+    fn x y
+      | x `elem` y = Nothing
+      | otherwise  = Just (x:y)
+
+queens :: Int -> [[Int]]
+queens n = filter testQueens $ permutations [1..n]
+
+testQueens :: [Int] -> Bool
+testQueens [x] = True
+testQueens (x:xs) = and (zipWith fn [1..] xs) && testQueens xs
+  where
+    fn a y = x + a /= y && x - a /= y
+
+printQueens :: [Int] -> String
+printQueens xs
+  = join . join $
+  (\x -> "\n": take (x -1) spaces <> ("()": take (l - x) spaces))
+  <$> xs
+  where
+    spaces = const "__" <$> [1..]
+    l = length xs
